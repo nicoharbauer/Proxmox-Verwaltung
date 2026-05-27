@@ -78,6 +78,19 @@ namespace ProxmoxVEGui
         private Label _resourceStatusPrefixLabel;
         private Label _resourceStatusValueLabel;
 
+        // Datacenter dashboard card: only visible when the Datacenter node is selected.
+        private ModernDashboardCardPanel _datacenterOverviewPanel;
+        private Label _datacenterTotalValueLabel;
+        private Label _datacenterCardTitleLabel;
+        private Label _datacenterCardSubtitleLabel;
+        private Label _datacenterOnlineValueLabel;
+        private Label _datacenterOnlineTextLabel;
+        private Label _datacenterOfflineValueLabel;
+        private Label _datacenterOfflineTextLabel;
+        private Label _datacenterTotalTextLabel;
+        private readonly Dictionary<Control, bool> _dashboardOriginalVisibility = new Dictionary<Control, bool>();
+        private bool _dashboardOriginalVisibilityCaptured = false;
+
         // Icon-only action buttons
         private ToolTip _actionButtonToolTip;
 
@@ -130,6 +143,7 @@ namespace ProxmoxVEGui
 
             _resourceStatusDefaultColor = lblResourceStatus.ForeColor;
             SetupSplitResourceStatusLabels();
+            EnsureDatacenterOverviewCard();
 
             ApplyTreeViewDesign();
             ApplyGridScrollbar();
@@ -2175,6 +2189,318 @@ namespace ProxmoxVEGui
         }
 
         // ─────────────────────────────────────────────────────────────────────
+        // DATACENTER OVERVIEW CARD
+        // ─────────────────────────────────────────────────────────────────────
+
+        private void EnsureDatacenterOverviewCard()
+        {
+            if (panelDashboard == null) return;
+
+            if (_datacenterOverviewPanel == null)
+            {
+                _datacenterOverviewPanel = new ModernDashboardCardPanel
+                {
+                    Name = "datacenterOverviewPanel",
+                    BackColor = Color.Transparent,
+                    FillColor = Color.FromArgb(17, 24, 39),
+                    BorderColor = Color.FromArgb(51, 65, 85),
+                    Radius = 18,
+                    Visible = false,
+                    Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right
+                };
+                _datacenterOverviewPanel.Resize += DatacenterOverviewPanel_Resize;
+
+                _datacenterCardTitleLabel = CreateDatacenterCardLabel(
+                    "Datacenter Status",
+                    new Font("Segoe UI", 14.5F, FontStyle.Bold),
+                    Color.FromArgb(248, 250, 252),
+                    ContentAlignment.MiddleLeft
+                );
+
+                _datacenterCardSubtitleLabel = CreateDatacenterCardLabel(
+                    string.Empty,
+                    new Font("Segoe UI", 8.7F, FontStyle.Regular),
+                    Color.FromArgb(148, 163, 184),
+                    ContentAlignment.MiddleLeft
+                );
+                _datacenterCardSubtitleLabel.Visible = false;
+
+                _datacenterOnlineValueLabel = CreateDatacenterCardLabel(
+                    "0",
+                    new Font("Segoe UI", 22F, FontStyle.Bold),
+                    _statusRunningColor,
+                    ContentAlignment.MiddleLeft
+                );
+
+                _datacenterOnlineTextLabel = CreateDatacenterCardLabel(
+                    "Nodes online",
+                    new Font("Segoe UI", 9F, FontStyle.Regular),
+                    Color.FromArgb(203, 213, 225),
+                    ContentAlignment.MiddleLeft
+                );
+
+                _datacenterOfflineValueLabel = CreateDatacenterCardLabel(
+                    "0",
+                    new Font("Segoe UI", 22F, FontStyle.Bold),
+                    _statusStoppedColor,
+                    ContentAlignment.MiddleLeft
+                );
+
+                _datacenterOfflineTextLabel = CreateDatacenterCardLabel(
+                    "Nodes offline",
+                    new Font("Segoe UI", 9F, FontStyle.Regular),
+                    Color.FromArgb(203, 213, 225),
+                    ContentAlignment.MiddleLeft
+                );
+
+                _datacenterTotalValueLabel = CreateDatacenterCardLabel(
+                    "0",
+                    new Font("Segoe UI", 22F, FontStyle.Bold),
+                    Color.FromArgb(249, 115, 22),
+                    ContentAlignment.MiddleCenter
+                );
+
+                _datacenterTotalTextLabel = CreateDatacenterCardLabel(
+                    "Nodes gesamt",
+                    new Font("Segoe UI", 9F, FontStyle.Regular),
+                    Color.FromArgb(203, 213, 225),
+                    ContentAlignment.MiddleCenter
+                );
+
+                _datacenterOverviewPanel.Controls.Add(_datacenterCardTitleLabel);
+                _datacenterOverviewPanel.Controls.Add(_datacenterCardSubtitleLabel);
+                _datacenterOverviewPanel.Controls.Add(_datacenterOnlineValueLabel);
+                _datacenterOverviewPanel.Controls.Add(_datacenterOnlineTextLabel);
+                _datacenterOverviewPanel.Controls.Add(_datacenterOfflineValueLabel);
+                _datacenterOverviewPanel.Controls.Add(_datacenterOfflineTextLabel);
+                _datacenterOverviewPanel.Controls.Add(_datacenterTotalValueLabel);
+                _datacenterOverviewPanel.Controls.Add(_datacenterTotalTextLabel);
+
+                panelDashboard.Controls.Add(_datacenterOverviewPanel);
+                panelDashboard.Resize -= PanelDashboard_ResizeForDatacenterOverview;
+                panelDashboard.Resize += PanelDashboard_ResizeForDatacenterOverview;
+            }
+
+            PositionDatacenterOverviewCard();
+            LayoutDatacenterOverviewCard();
+            UpdateDatacenterOverviewCard();
+        }
+
+        private Label CreateDatacenterCardLabel(string text, Font font, Color color, ContentAlignment alignment)
+        {
+            return new Label
+            {
+                Text = text,
+                Font = font,
+                ForeColor = color,
+                BackColor = Color.Transparent,
+                AutoSize = false,
+                AutoEllipsis = true,
+                TextAlign = alignment
+            };
+        }
+
+        private void PanelDashboard_ResizeForDatacenterOverview(object sender, EventArgs e)
+        {
+            PositionDatacenterOverviewCard();
+            LayoutDatacenterOverviewCard();
+        }
+
+        private void DatacenterOverviewPanel_Resize(object sender, EventArgs e)
+        {
+            LayoutDatacenterOverviewCard();
+        }
+
+        private void PositionDatacenterOverviewCard()
+        {
+            if (panelDashboard == null || _datacenterOverviewPanel == null) return;
+
+            int margin = 24;
+
+            if (panelDashboard.ClientSize.Width < 420)
+                margin = 12;
+
+            int width = Math.Max(220, panelDashboard.ClientSize.Width - (margin * 2));
+            int availableHeight = Math.Max(1, panelDashboard.ClientSize.Height - (margin * 2));
+
+            // Die Datacenter-Card soll kompakt bleiben, damit der Cluster-Log darunter
+            // nicht unnötig weit nach unten rutscht. Bei schmalen Fenstern wird sie höher,
+            // weil Diagramm und Werte dann untereinander stehen.
+            int preferredHeight = panelDashboard.ClientSize.Width < 520 ? 245 : 175;
+            int height = Math.Max(160, Math.Min(preferredHeight, availableHeight));
+
+            _datacenterOverviewPanel.Bounds = new Rectangle(margin, margin, width, height);
+        }
+
+        private void LayoutDatacenterOverviewCard()
+        {
+            if (_datacenterOverviewPanel == null) return;
+
+            int width = _datacenterOverviewPanel.ClientSize.Width;
+            int height = _datacenterOverviewPanel.ClientSize.Height;
+            if (width <= 0 || height <= 0) return;
+
+            int padding = width < 520 ? 22 : 32;
+            int titleTop = 20;
+            int titleHeight = 30;
+
+            _datacenterCardTitleLabel.Bounds = new Rectangle(
+                padding,
+                titleTop,
+                Math.Max(1, width - (padding * 2)),
+                titleHeight
+            );
+
+            if (_datacenterCardSubtitleLabel != null)
+            {
+                _datacenterCardSubtitleLabel.Text = string.Empty;
+                _datacenterCardSubtitleLabel.Visible = false;
+                _datacenterCardSubtitleLabel.Bounds = Rectangle.Empty;
+            }
+
+            Label[] valueLabels =
+            {
+                _datacenterOnlineValueLabel,
+                _datacenterOfflineValueLabel,
+                _datacenterTotalValueLabel
+            };
+
+            Label[] textLabels =
+            {
+                _datacenterOnlineTextLabel,
+                _datacenterOfflineTextLabel,
+                _datacenterTotalTextLabel
+            };
+
+            foreach (Label label in valueLabels.Concat(textLabels).Where(l => l != null))
+            {
+                label.TextAlign = ContentAlignment.MiddleCenter;
+                label.Visible = true;
+            }
+
+            int metricTop = titleTop + titleHeight + 28;
+            int valueHeight = 38;
+            int textHeight = 22;
+
+            bool stackedLayout = width < 420;
+
+            if (!stackedLayout)
+            {
+                int availableWidth = Math.Max(1, width - (padding * 2));
+                int columnGap = width < 640 ? 16 : 28;
+                int columnWidth = Math.Max(1, (availableWidth - (columnGap * 2)) / 3);
+                int startX = padding;
+
+                for (int i = 0; i < 3; i++)
+                {
+                    int x = startX + (i * (columnWidth + columnGap));
+
+                    if (valueLabels[i] != null)
+                        valueLabels[i].Bounds = new Rectangle(x, metricTop, columnWidth, valueHeight);
+
+                    if (textLabels[i] != null)
+                        textLabels[i].Bounds = new Rectangle(x, metricTop + valueHeight - 2, columnWidth, textHeight);
+                }
+
+                return;
+            }
+
+            int rowHeight = 54;
+            int rowGap = 8;
+            int rowWidth = Math.Max(1, width - (padding * 2));
+            int y = metricTop - 4;
+
+            for (int i = 0; i < 3; i++)
+            {
+                if (valueLabels[i] != null)
+                    valueLabels[i].Bounds = new Rectangle(padding, y, rowWidth, 30);
+
+                if (textLabels[i] != null)
+                    textLabels[i].Bounds = new Rectangle(padding, y + 28, rowWidth, 20);
+
+                y += rowHeight + rowGap;
+            }
+        }
+
+        private void CaptureDashboardOriginalVisibility()
+        {
+            if (panelDashboard == null || _dashboardOriginalVisibilityCaptured) return;
+
+            _dashboardOriginalVisibility.Clear();
+
+            foreach (Control control in panelDashboard.Controls)
+            {
+                if (control == _datacenterOverviewPanel) continue;
+                _dashboardOriginalVisibility[control] = control.Visible;
+            }
+
+            _dashboardOriginalVisibilityCaptured = true;
+        }
+
+        private void ShowDatacenterOverviewCard()
+        {
+            EnsureDatacenterOverviewCard();
+            if (panelDashboard == null || _datacenterOverviewPanel == null) return;
+
+            CaptureDashboardOriginalVisibility();
+
+            foreach (Control control in panelDashboard.Controls)
+            {
+                if (control == _datacenterOverviewPanel) continue;
+                control.Visible = false;
+            }
+
+            _datacenterOverviewPanel.Visible = true;
+            _datacenterOverviewPanel.BringToFront();
+            UpdateDatacenterOverviewCard();
+        }
+
+        private void HideDatacenterOverviewCard()
+        {
+            if (panelDashboard == null) return;
+
+            if (_datacenterOverviewPanel != null)
+                _datacenterOverviewPanel.Visible = false;
+
+            if (!_dashboardOriginalVisibilityCaptured) return;
+
+            foreach (KeyValuePair<Control, bool> item in _dashboardOriginalVisibility.ToList())
+            {
+                Control control = item.Key;
+                if (control == null || control.IsDisposed || control == _datacenterOverviewPanel) continue;
+                if (control.Parent == panelDashboard)
+                    control.Visible = item.Value;
+            }
+        }
+
+        private void UpdateDatacenterOverviewCard()
+        {
+            int totalNodes = _cachedNodes != null ? _cachedNodes.Count : 0;
+            int onlineNodes = _cachedNodes != null
+                ? _cachedNodes.Count(n => string.Equals(n.Status, "online", StringComparison.OrdinalIgnoreCase))
+                : 0;
+            int offlineNodes = Math.Max(0, totalNodes - onlineNodes);
+
+            if (_datacenterOnlineValueLabel != null)
+                _datacenterOnlineValueLabel.Text = onlineNodes.ToString();
+
+            if (_datacenterOfflineValueLabel != null)
+                _datacenterOfflineValueLabel.Text = offlineNodes.ToString();
+
+            if (_datacenterTotalValueLabel != null)
+                _datacenterTotalValueLabel.Text = totalNodes.ToString();
+
+            if (_datacenterTotalTextLabel != null)
+                _datacenterTotalTextLabel.Text = "Nodes gesamt";
+
+            if (_datacenterCardSubtitleLabel != null)
+            {
+                _datacenterCardSubtitleLabel.Text = string.Empty;
+                _datacenterCardSubtitleLabel.Visible = false;
+            }
+        }
+
+        // ─────────────────────────────────────────────────────────────────────
         // DATA REFRESH
         // ─────────────────────────────────────────────────────────────────────
 
@@ -2428,33 +2754,17 @@ namespace ProxmoxVEGui
 
             if (tag.Type == "datacenter")
             {
-                lblResourceType.Text = "Resource Type: Datacenter / Cluster";
-                lblResourceID.Text = "Total Nodes: " + _cachedNodes.Count;
-                lblSpecsCores.Text = "Total CPU Cores: " + _cachedNodes.Sum(n => n.MaxCpu);
-                lblSpecsMemory.Text = "Total Memory: " + FormatBytes(_cachedNodes.Sum(n => n.MaxMem));
-
-                long totalUptime = _cachedNodes.Count > 0 ? _cachedNodes.Max(n => n.Uptime) : 0;
-                lblUptime.Text = "Cluster Max Uptime: " + FormatUptime(totalUptime);
-                SetResourceStatusLabel($"Nodes: {_cachedNodes.Count(n => n.Status == "online")} / {_cachedNodes.Count} Online");
-
-                lblDetailNode.Text = "Host Node: N/A";
-                lblDetailHa.Text = "HA State: Enabled";
-                lblDetailIp.Text = "IP Addresses: Cluster Subnet";
-                lblDetailDisk.Text = "Cluster Disk: " + FormatBytes(_cachedNodes.Sum(n => n.MaxDisk));
-
-                long usedMem = _cachedNodes.Sum(n => n.Mem);
-                long totalMem = _cachedNodes.Sum(n => n.MaxMem);
-                double avgCpu = _cachedNodes.Count > 0 ? _cachedNodes.Average(n => n.Cpu) : 0;
-
-                chartCpu.AddValue(avgCpu * 100);
-                chartRam.AddValue(totalMem > 0 ? ((double)usedMem / totalMem) * 100 : 0);
+                ShowDatacenterOverviewCard();
+                SetResourceStatusLabel($"Nodes: {_cachedNodes.Count(n => string.Equals(n.Status, "online", StringComparison.OrdinalIgnoreCase))} / {_cachedNodes.Count} Online");
 
                 btnTabConsole.Enabled = false;
                 lblConsoleWarning.Text = "Select a specific node, VM or LXC to open an interactive console shell.";
                 SwitchToTab("dashboard");
+                ShowDatacenterOverviewCard();
             }
             else if (tag.Type == "node")
             {
+                HideDatacenterOverviewCard();
                 var node = tag.Data as PveNode;
                 if (node != null)
                 {
@@ -2480,6 +2790,7 @@ namespace ProxmoxVEGui
             }
             else if (tag.Type == "vm")
             {
+                HideDatacenterOverviewCard();
                 var vm = tag.Data as PveVm;
                 if (vm != null)
                 {
@@ -2507,6 +2818,7 @@ namespace ProxmoxVEGui
             }
             else if (tag.Type == "lxc")
             {
+                HideDatacenterOverviewCard();
                 var lxc = tag.Data as PveLxc;
                 if (lxc != null)
                 {
@@ -2534,6 +2846,7 @@ namespace ProxmoxVEGui
             }
             else if (tag.Type == "storage")
             {
+                HideDatacenterOverviewCard();
                 var store = tag.Data as PveStorage;
                 if (store != null)
                 {
@@ -2934,13 +3247,8 @@ namespace ProxmoxVEGui
 
                     if (tag.Type == "datacenter")
                     {
-                        long usedMem = _cachedNodes.Sum(n => n.Mem);
-                        long totalMem = _cachedNodes.Sum(n => n.MaxMem);
-                        double avgCpu = _cachedNodes.Count > 0 ? _cachedNodes.Average(n => n.Cpu) : 0;
-
-                        chartCpu.AddValue(avgCpu * 100);
-                        chartRam.AddValue(totalMem > 0 ? ((double)usedMem / totalMem) * 100 : 0);
-                        SetResourceStatusLabel($"Nodes: {_cachedNodes.Count(n => n.Status == "online")} / {_cachedNodes.Count} Online");
+                        UpdateDatacenterOverviewCard();
+                        SetResourceStatusLabel($"Nodes: {_cachedNodes.Count(n => string.Equals(n.Status, "online", StringComparison.OrdinalIgnoreCase))} / {_cachedNodes.Count} Online");
                     }
                     else if (tag.Type == "node")
                     {
@@ -3050,6 +3358,183 @@ namespace ProxmoxVEGui
         public int VmId { get; set; }
         public string Name { get; set; }
         public object Data { get; set; }
+    }
+
+    public class ModernDashboardCardPanel : Panel
+    {
+        public Color FillColor { get; set; } = Color.FromArgb(17, 24, 39);
+        public Color BorderColor { get; set; } = Color.FromArgb(51, 65, 85);
+        public int Radius { get; set; } = 18;
+
+        public ModernDashboardCardPanel()
+        {
+            SetStyle(
+                ControlStyles.AllPaintingInWmPaint |
+                ControlStyles.UserPaint |
+                ControlStyles.OptimizedDoubleBuffer |
+                ControlStyles.ResizeRedraw |
+                ControlStyles.SupportsTransparentBackColor,
+                true
+            );
+
+            BackColor = Color.Transparent;
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            base.OnPaint(e);
+
+            e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+
+            Rectangle rect = new Rectangle(0, 0, Width - 1, Height - 1);
+            if (rect.Width <= 0 || rect.Height <= 0) return;
+
+            using (GraphicsPath path = CreateRoundedRectanglePath(rect, Radius))
+            using (SolidBrush brush = new SolidBrush(FillColor))
+            using (Pen borderPen = new Pen(BorderColor, 1))
+            {
+                e.Graphics.FillPath(brush, path);
+                e.Graphics.DrawPath(borderPen, path);
+            }
+        }
+
+        private GraphicsPath CreateRoundedRectanglePath(Rectangle rect, int radius)
+        {
+            GraphicsPath path = new GraphicsPath();
+
+            if (rect.Width <= 0 || rect.Height <= 0)
+                return path;
+
+            if (radius <= 0)
+            {
+                path.AddRectangle(rect);
+                path.CloseFigure();
+                return path;
+            }
+
+            radius = Math.Min(radius, Math.Min(rect.Width, rect.Height) / 2);
+            int diameter = Math.Max(1, radius * 2);
+
+            path.AddArc(rect.Left, rect.Top, diameter, diameter, 180, 90);
+            path.AddArc(rect.Right - diameter, rect.Top, diameter, diameter, 270, 90);
+            path.AddArc(rect.Right - diameter, rect.Bottom - diameter, diameter, diameter, 0, 90);
+            path.AddArc(rect.Left, rect.Bottom - diameter, diameter, diameter, 90, 90);
+            path.CloseFigure();
+
+            return path;
+        }
+    }
+
+    public class NodeStatusDonutChart : Control
+    {
+        public int OnlineCount { get; set; }
+        public int OfflineCount { get; set; }
+        public Color OnlineColor { get; set; } = Color.FromArgb(34, 197, 94);
+        public Color OfflineColor { get; set; } = Color.FromArgb(239, 68, 68);
+        public Color EmptyColor { get; set; } = Color.FromArgb(51, 65, 85);
+        public Color TextColor { get; set; } = Color.FromArgb(248, 250, 252);
+        public Color MutedTextColor { get; set; } = Color.FromArgb(148, 163, 184);
+        public Color HoleColor { get; set; } = Color.FromArgb(17, 24, 39);
+
+        public NodeStatusDonutChart()
+        {
+            SetStyle(
+                ControlStyles.AllPaintingInWmPaint |
+                ControlStyles.UserPaint |
+                ControlStyles.OptimizedDoubleBuffer |
+                ControlStyles.ResizeRedraw |
+                ControlStyles.SupportsTransparentBackColor,
+                true
+            );
+
+            BackColor = Color.Transparent;
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            base.OnPaint(e);
+
+            e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+            e.Graphics.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
+            e.Graphics.PixelOffsetMode = PixelOffsetMode.HighQuality;
+            e.Graphics.CompositingQuality = CompositingQuality.HighQuality;
+
+            int online = Math.Max(0, OnlineCount);
+            int offline = Math.Max(0, OfflineCount);
+            int total = online + offline;
+
+            int padding = 6;
+            int size = Math.Min(Width, Height) - (padding * 2);
+            if (size <= 20) return;
+
+            Rectangle outerRect = new Rectangle(
+                (Width - size) / 2,
+                (Height - size) / 2,
+                size,
+                size
+            );
+
+            int ringThickness = Math.Max(18, size / 5);
+            int innerSize = Math.Max(1, size - (ringThickness * 2));
+            Rectangle innerRect = new Rectangle(
+                outerRect.Left + ringThickness,
+                outerRect.Top + ringThickness,
+                innerSize,
+                innerSize
+            );
+
+            using (SolidBrush emptyBrush = new SolidBrush(EmptyColor))
+            using (SolidBrush onlineBrush = new SolidBrush(OnlineColor))
+            using (SolidBrush offlineBrush = new SolidBrush(OfflineColor))
+            using (SolidBrush holeBrush = new SolidBrush(HoleColor))
+            {
+                // Kein DrawArc mit dickem Pen verwenden: dabei wird der Kreis am Rand abgeschnitten.
+                // Stattdessen wird ein echter Donut aus gefüllten Ellipsen/Pies gezeichnet.
+                if (total <= 0)
+                {
+                    e.Graphics.FillEllipse(emptyBrush, outerRect);
+                }
+                else if (online > 0 && offline <= 0)
+                {
+                    e.Graphics.FillEllipse(onlineBrush, outerRect);
+                }
+                else if (offline > 0 && online <= 0)
+                {
+                    e.Graphics.FillEllipse(offlineBrush, outerRect);
+                }
+                else
+                {
+                    float onlineSweep = (float)(online * 360.0 / total);
+                    onlineSweep = Math.Max(0.1F, Math.Min(359.9F, onlineSweep));
+                    float offlineSweep = 360.0F - onlineSweep;
+
+                    e.Graphics.FillPie(onlineBrush, outerRect, -90F, onlineSweep);
+                    e.Graphics.FillPie(offlineBrush, outerRect, -90F + onlineSweep, offlineSweep);
+                }
+
+                e.Graphics.FillEllipse(holeBrush, innerRect);
+            }
+
+            string mainText = total.ToString();
+            string subText = total == 1 ? "Node" : "Nodes";
+
+            using (Font mainFont = new Font("Segoe UI", Math.Max(16F, size / 5.8F), FontStyle.Bold))
+            using (Font subFont = new Font("Segoe UI", Math.Max(8.5F, size / 14.5F), FontStyle.Regular))
+            using (SolidBrush mainBrush = new SolidBrush(TextColor))
+            using (SolidBrush subBrush = new SolidBrush(MutedTextColor))
+            {
+                SizeF mainSize = e.Graphics.MeasureString(mainText, mainFont);
+                SizeF subSize = e.Graphics.MeasureString(subText, subFont);
+
+                float centerX = Width / 2F;
+                float centerY = Height / 2F;
+                float mainY = centerY - mainSize.Height + 5;
+                float subY = centerY + 4;
+
+                e.Graphics.DrawString(mainText, mainFont, mainBrush, centerX - (mainSize.Width / 2F), mainY);
+                e.Graphics.DrawString(subText, subFont, subBrush, centerX - (subSize.Width / 2F), subY);
+            }
+        }
     }
 
     public class ModernAccountPanel : Panel
